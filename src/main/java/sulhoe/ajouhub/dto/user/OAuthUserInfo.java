@@ -1,7 +1,7 @@
 package sulhoe.ajouhub.dto.user;
 
-public record UserRequestDto(
+public record OAuthUserInfo(
         String email,
         String department
-) {
-}
+) {}
+

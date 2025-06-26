@@ -1,6 +1,6 @@
 package sulhoe.ajouhub.dto.login;
 
-public class LoginResponseDto {
-    private String accessToken;
-    private String refreshToken;
-}
+public record LoginResponseDto(
+        String accessToken,
+        String refreshToken
+) {}

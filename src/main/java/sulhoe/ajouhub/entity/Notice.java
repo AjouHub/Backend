@@ -1,15 +1,15 @@
 package sulhoe.ajouhub.entity;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.ManyToMany;
+import jakarta.persistence.*;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 import java.util.HashSet;
 import java.util.Set;
 
 @Entity
 @Getter
+@NoArgsConstructor
 public class Notice {
 
     @Id
@@ -24,9 +24,6 @@ public class Notice {
 
     @ManyToMany(mappedBy = "savedNotices")
     private Set<User> savedByUsers = new HashSet<>();
-
-    // Default constructor (for using JPA)
-    protected Notice() {}
 
     public Notice(String number, String category, String title, String department, String date, String link) {
         this.number = number;

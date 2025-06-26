@@ -1,4 +1,5 @@
 package sulhoe.ajouhub.dto.login;
 
-public class LoginRequestDto {
-}
+public record LoginRequestDto(
+        String code
+) {}
