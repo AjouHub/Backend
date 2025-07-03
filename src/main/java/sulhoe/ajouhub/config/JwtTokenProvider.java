@@ -1,88 +1,108 @@
 package sulhoe.ajouhub.config;
 
 import io.jsonwebtoken.*;
+import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
-import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Date;
 
-@Component
 @Slf4j
+@Component
 public class JwtTokenProvider {
 
-    public static final String ACCESS       = "access";
-    public static final String REFRESH      = "refresh";
-    public static final String TOKEN_TYPE   = "tokenType";
-    public static final String TOKEN_HEADER = "Auth-Token";     // 클라이언트가 보내줄 헤더 이름
-
     @Value("${jwt.key}")
-    private String tokenSecretKey;           // application.yml / properties에서 주입
+    private String secretKey;              // application.properties 에서 Base64로 인코딩된 키
 
-    // 1 시간
-    private static final long JWT_ACCESS_EXP  = 1000L * 60 * 60;
-    // 7 일
-    private static final long JWT_REFRESH_EXP = 1000L * 60 * 60 * 24 * 7;
+    private SecretKey signingKey;
+    private static final long ACCESS_EXP  = 1000L * 60 * 60;        // 1시간
+    private static final long REFRESH_EXP = 1000L * 60 * 60 * 24;   // 1일
 
-    /** secret key Base64 인코딩 */
     @PostConstruct
     public void init() {
-        tokenSecretKey = Base64.getEncoder()
-                .encodeToString(tokenSecretKey.getBytes(StandardCharsets.UTF_8));
+        // Base64 디코딩 후 HMAC-SHA 키 생성
+        byte[] keyBytes = Base64.getDecoder().decode(secretKey);
+        this.signingKey = Keys.hmacShaKeyFor(keyBytes);
     }
 
-    /** AccessToken 생성 */
-    public String createAccessToken(String email) {
-        Date now = new Date();
-        return Jwts.builder()
-                .setSubject(email)
-                .setIssuedAt(now)
-                .setExpiration(new Date(now.getTime() + JWT_ACCESS_EXP))
-                .claim(TOKEN_TYPE, ACCESS)
-                .signWith(SignatureAlgorithm.HS256, tokenSecretKey)
+    /**
+     * Access Token: email(subject), name, department 클레임 포함
+     */
+    public String createAccessToken(String email, String name, String department) {
+        long now = System.currentTimeMillis();
+        String token = Jwts.builder()
+                .setSubject(email)                          // sub = 이메일
+                .setIssuedAt(new Date(now))                 // iat
+                .setExpiration(new Date(now + ACCESS_EXP))  // exp
+                .claim("name", name)                        // 사용자 이름
+                .claim("dept", department)                  // 학과 (필요 시)
+                .signWith(signingKey, SignatureAlgorithm.HS256)
                 .compact();
+
+        log.debug("[JWT-ACCESS] sub={} name={} dept={} exp={}", email, name, department,
+                new Date(now + ACCESS_EXP));
+        return token;
     }
 
-    /** RefreshToken 생성 */
+    /**
+     * Refresh Token: email(subject) 만 담기
+     */
     public String createRefreshToken(String email) {
-        Date now = new Date();
-        return Jwts.builder()
+        long now = System.currentTimeMillis();
+        String token =  Jwts.builder()
                 .setSubject(email)
-                .setIssuedAt(now)
-                .setExpiration(new Date(now.getTime() + JWT_REFRESH_EXP))
-                .claim(TOKEN_TYPE, REFRESH)
-                .signWith(SignatureAlgorithm.HS256, tokenSecretKey)
+                .setIssuedAt(new Date(now))
+                .setExpiration(new Date(now + REFRESH_EXP))
+                .signWith(signingKey, SignatureAlgorithm.HS256)
                 .compact();
+
+        log.debug("[JWT-REFRESH] sub={} exp={}", email, new Date(now + REFRESH_EXP));
+        return token;
     }
 
-    /** 토큰에서 회원 email 추출 */
-    public String getEmail(String token) {
-        return Jwts.parser()
-                .setSigningKey(tokenSecretKey)
-                .parseClaimsJws(token)
-                .getBody()
-                .getSubject();
-    }
-
-    /** 토큰 유효성 검사 */
+    /**
+     * 토큰 유효성 검사
+     */
     public boolean validateToken(String token) {
         try {
-            Jwts.parser().setSigningKey(tokenSecretKey).parseClaimsJws(token);
+            Jwts.parserBuilder()
+                    .setSigningKey(signingKey)
+                    .build()
+                    .parseClaimsJws(token);
+
+            log.debug("[JWT-VALID] token valid, sub={}", getEmail(token));
             return true;
-        } catch (ExpiredJwtException e) {
-            log.debug("만료된 토큰");
         } catch (JwtException | IllegalArgumentException e) {
-            log.debug("유효하지 않은 토큰");
+            log.warn("[JWT-INVALID] {}", e.getMessage());
+            return false;
         }
-        return false;
     }
 
-    /** Http Header 에서 토큰 추출 */
-    public String resolveToken(HttpServletRequest request) {
-        return request.getHeader(TOKEN_HEADER);
+    /**
+     * Claims 꺼내기
+     */
+    private Claims getClaims(String token) {
+        return Jwts.parserBuilder()
+                .setSigningKey(signingKey)
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
+    }
+
+    public String getEmail(String token) {
+        return getClaims(token).getSubject();
+    }
+
+    public String getName(String token) {
+        return getClaims(token).get("name", String.class);
+    }
+
+    public String getDepartment(String token) {
+        return getClaims(token).get("dept", String.class);
     }
 }

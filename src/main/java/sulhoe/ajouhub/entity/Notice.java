@@ -6,20 +6,34 @@ import lombok.NoArgsConstructor;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.UUID;
 
 @Entity
 @Getter
 @NoArgsConstructor
+@Table(name = "notices")
 public class Notice {
 
     @Id
-    private String id;
+    @GeneratedValue
+    private UUID id;
 
+    @Column(nullable = false)
     private String number;
+
+    @Column
     private String category;
+
+    @Column(nullable = false)
     private String title;
+
+    @Column
     private String department;
+
+    @Column
     private String date;
+
+    @Column
     private String link;
 
     @ManyToMany(mappedBy = "savedNotices")
