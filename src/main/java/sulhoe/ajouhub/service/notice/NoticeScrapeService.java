@@ -1,130 +1,100 @@
 package sulhoe.ajouhub.service.notice;
 
+import lombok.RequiredArgsConstructor;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Service;
 import sulhoe.ajouhub.config.NoticeConfig;
 import sulhoe.ajouhub.dto.notice.NoticeDto;
 import sulhoe.ajouhub.entity.Notice;
 import sulhoe.ajouhub.repository.NoticeRepository;
 import sulhoe.ajouhub.service.firebase.PushNotificationService;
+import sulhoe.ajouhub.service.notice.parser.NoticeParser;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 
 @Service
+@RequiredArgsConstructor
 public class NoticeScrapeService {
-
     private static final Logger logger = LoggerFactory.getLogger(NoticeScrapeService.class);
+
     private final NoticeConfig noticeConfig;
-
+    private final ApplicationContext ctx;
     private final PushNotificationService push;
-    private final NoticeRepository noticeRepo;
-    private final Map<String, Boolean> isFirstLoadMap = new HashMap<>();
-
-    @Autowired
-    public NoticeScrapeService(NoticeConfig noticeConfig, PushNotificationService push, NoticeRepository noticeRepo) {
-        this.noticeConfig = noticeConfig;
-        this.push = push;
-        this.noticeRepo = noticeRepo;
-    }
+    private final NoticeRepository repo;
+    private final NoticePersistenceService persistence;
 
     public void scrapeNotices(String url, String type) throws IOException {
-        boolean isFirst = isFirstLoadMap.getOrDefault(type, true);
-        List<Notice> allNotices = new ArrayList<>();
-        List<Notice> newNotices = new ArrayList<>();
-
+        boolean fullLoad = !repo.existsByType(type); // 전체를 로드할 것인지: true 아닌지:false
+        logger.info("[{}] scrapeNotices: fullLoad={}", type, fullLoad);
         logger.info("[Info] Start scraping: {}", url);
 
-        try {
-            Document doc = Jsoup.connect(url).get();
-            Elements fixedRows = doc.select("tr.b-top-box");
-            addNotices(allNotices, newNotices, fixedRows, type, url, true, fixedRows.size());
+        // 1) 파서 선택
+        String parserBean = noticeConfig.getParser().getOrDefault(type, noticeConfig.getParser().get("default"));
+        logger.info("[Info] Parser: {}", parserBean);
+        NoticeParser parser = ctx.getBean(parserBean, NoticeParser.class);
 
-            int articleLimit = 10;
-            for (int offset = 0; offset < 100; offset += articleLimit) {
-                String pagedUrl = url + "?mode=list&&articleLimit=" + articleLimit + "&article.offset=" + offset;
-                logger.info("Scraping page: {}", pagedUrl);
-                Document pagedDoc = Jsoup.connect(pagedUrl).get();
-                Elements generalRows = pagedDoc.select("tr:not(.b-top-box)");
-                if (generalRows.isEmpty()) break;
-                addNotices(allNotices, newNotices, generalRows, type, url, false, generalRows.size());
+        List<Notice> scraped = new ArrayList<>();
+
+        // 2) 첫 페이지(고정 공지)
+        Document doc = Jsoup.connect(url).get();
+        Elements fixedRows = parser.selectFixedRows(doc);
+        fixedRows.forEach(row -> {
+            Notice n = parser.parseRow(row, true, url);
+            n.setType(type);
+            scraped.add(n);
+        });
+
+        // 3) 일반 페이지 (최소 1회, fullLoad일 때만 계속)
+        int pageIdx = 0;
+        do {
+            String pagedUrl = parser.buildPageUrl(url, pageIdx);
+            logger.info("Scraping page: {}", pagedUrl);
+            Document pagedDoc = Jsoup.connect(pagedUrl).get();
+            Elements generalRows = parser.selectGeneralRows(pagedDoc);
+
+            if (generalRows.isEmpty()) { // row가 아예 없으면 종료
+                logger.info("No more rows at pageIdx {}; breaking.", pageIdx);
+                break;
+            }
+            generalRows.forEach(row -> {
+                Notice n =parser.parseRow(row, false, url);
+                n.setType(type);
+                scraped.add(n);
+            });
+            if (!fullLoad) { // 전체 로드가 아니라면 1페이지만
+                logger.info("Not fullLoad; only first page needed. Breaking.");
+                break;
             }
 
-            int lastNewCount = newNotices.size();
-            logger.info("Total notices: {}, New/Updated: {}", allNotices.size(), lastNewCount);
-
-            if (!isFirst && !newNotices.isEmpty()) {
-                List<NoticeDto> dtoList = NoticeDto.toDtoList(newNotices);
-                // push.sendPushNotification(dtoList, type);
+            if (generalRows.size() < 10) { // 마지막 페이지 판단: 가져온 row 수가 articleLimit 미만이면 종료
+                logger.info("Last page detected (rows < 10). Breaking.");
+                break;
             }
 
-            isFirstLoadMap.put(type, false);
+            pageIdx++;
+        } while (true);
 
-        } catch (IOException e) {
-            logger.error("Scraping failed: {}", url, e);
-            throw e;
+        // 4) 작성일 별도 조회
+        if (noticeConfig.getCategoriesRequirePostedDate().contains(type)) {
+            scraped.forEach(n -> n.setDate(fetchPostedDate(n.getLink())));
         }
-    }
 
-    private void addNotices(List<Notice> notices, List<Notice> newNotices, Elements rows, String type, String url, boolean isFixed, int limit) {
-        int count = Math.min(rows.size(), limit);
-        for (int i = 0; i < count; i++) {
-            try {
-                Element row = rows.get(i);
-                String number = isFixed ? "공지" : getElementText(row, 0);
-                String category = getElementText(row, 1);
-                Element titleElement = row.selectFirst("td a");
-                String department = getElementText(row, 4);
-                String date = getElementText(row, 5);
+        // 5) DB 저장 ↔ 신규/업데이트된 리스트
+        List<Notice> newOrUpdated = persistence.persistNotices(scraped);
+        logger.info("[{}] New/Updated count: {}", type, newOrUpdated.size());
 
-                if (titleElement != null) {
-                    String title = titleElement.text();
-                    String articleNo = titleElement.attr("href").split("articleNo=")[1].split("&")[0];
-                    String link = url + "?mode=view&articleNo=" + articleNo;
-
-                    if (noticeConfig.getCategoriesRequirePostedDate().contains(type)) {
-                        date = fetchPostedDate(link);
-                    }
-
-                    Notice scrapedNotice = new Notice(number, category, title, department, date, link);
-                    Optional<Notice> existingOpt = noticeRepo.findByLink(link);
-
-                    if (existingOpt.isEmpty()) {
-                        noticeRepo.save(scrapedNotice);
-                        newNotices.add(scrapedNotice);
-                    } else {
-                        Notice existing = existingOpt.get();
-                        if (isUpdated(existing, scrapedNotice)) {
-                            updateNotice(existing, scrapedNotice);
-                            noticeRepo.save(existing);
-                            newNotices.add(existing);
-                        }
-                    }
-
-                    notices.add(scrapedNotice);
-                }
-            } catch (Exception e) {
-                logger.error("Row parse error index={}: {}", i, e.getMessage());
-            }
+        // 6) 운영 중(=fullLoad=false) 알림
+        if (!fullLoad && !newOrUpdated.isEmpty()) {
+            // push.sendPushNotification(NoticeDto.toDtoList(newOrUpdated), type);
         }
-    }
-
-    private boolean isUpdated(Notice oldOne, Notice newOne) {
-        return !Objects.equals(oldOne.getTitle(), newOne.getTitle()) || !Objects.equals(oldOne.getDate(), newOne.getDate()) || !Objects.equals(oldOne.getDepartment(), newOne.getDepartment()) || !Objects.equals(oldOne.getCategory(), newOne.getCategory());
-    }
-
-    private void updateNotice(Notice oldOne, Notice newOne) {
-        oldOne.setTitle(newOne.getTitle());
-        oldOne.setDate(newOne.getDate());
-        oldOne.setDepartment(newOne.getDepartment());
-        oldOne.setCategory(newOne.getCategory());
-        oldOne.setNumber(newOne.getNumber());
     }
 
     private String fetchPostedDate(String link) {
@@ -136,10 +106,5 @@ public class NoticeScrapeService {
             logger.error("fetchPostedDate failed: {}", link, e);
             return "Unknown";
         }
-    }
-
-    private String getElementText(Element row, int index) {
-        Elements elements = row.select("td");
-        return elements.size() > index ? elements.get(index).text() : "";
     }
 }
