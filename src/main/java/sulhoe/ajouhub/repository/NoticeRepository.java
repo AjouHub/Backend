@@ -19,4 +19,6 @@ public interface NoticeRepository extends JpaRepository<Notice, UUID> {
 
     // 카테고리 + 제목 검색  페이징
     Page<Notice> findByCategoryAndTitleContainingIgnoreCase(String category, String title, Pageable pageable);
+
+    boolean existsByType(String category);
 }
