@@ -14,7 +14,10 @@ import java.util.Set;
 @Getter
 @Setter
 public class NoticeConfig {
+    // key = 카테고리 이름, value = 스크래핑할 URL
     private Map<String, String> urls;
-    // 게시일을 별도로 확인해야 할 카테고리 목록
+    // 별도 작성일 조회가 필요한 카테고리
     private Set<String> categoriesRequirePostedDate;
+    // key = 카테고리 이름, value = Spring Bean 이름(NoticeParser)
+    private Map<String,String> parser;
 }
