@@ -21,6 +21,9 @@ public class Notice {
     private UUID id;
 
     @Column(nullable = false)
+    private String type;
+
+    @Column(nullable = false)
     private String number;
 
     @Column

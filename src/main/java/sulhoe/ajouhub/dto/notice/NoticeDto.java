@@ -5,6 +5,7 @@ import sulhoe.ajouhub.entity.Notice;
 import java.util.List;
 
 public record NoticeDto(String id,
+                        String type,
                         String number,
                         String category,
                         String title,
@@ -14,6 +15,7 @@ public record NoticeDto(String id,
     public static NoticeDto fromEntity(Notice notice) {
         return new NoticeDto(
                 notice.getId().toString(),
+                notice.getType(),
                 notice.getNumber(),
                 notice.getCategory(),
                 notice.getTitle(),
