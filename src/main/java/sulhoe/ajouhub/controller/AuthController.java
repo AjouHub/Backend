@@ -58,7 +58,7 @@ public class AuthController {
         ResponseCookie cookie = ResponseCookie.from("refreshToken", dto.refreshToken())
             .httpOnly(true)
             .secure(false)          // 로컬 테스트면 false, 운영 HTTPS 는 true
-            .sameSite("None")      // 크로스‑도메인 필수
+            .sameSite("Lax")      // 크로스‑도메인 필수
             .path("/")
             .maxAge(Duration.ofDays(7))
             .build();
