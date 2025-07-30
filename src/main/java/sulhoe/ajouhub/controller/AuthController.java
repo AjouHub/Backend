@@ -53,8 +53,19 @@ public class AuthController {
         log.debug("[CTRL] OAuth callback received, code={}", code);
 
         LoginResponseDto dto = authService.loginWithGoogle(code);
+        
+        // 리프레시 토큰 쿠키로 설정
+        ResponseCookie cookie = ResponseCookie.from("refreshToken", dto.refreshToken())
+            .httpOnly(true)
+            .secure(true)          // 로컬 테스트면 false, 운영 HTTPS 는 true
+            .sameSite("None")      // 크로스‑도메인 필수
+            .path("/")
+            .maxAge(Duration.ofDays(7))
+            .build();
+    res.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+
         // 프론트엔드 URL에 토큰을 쿼리로 붙여 리다이렉트
-        String target = UriComponentsBuilder.fromUriString(frontendUrl).queryParam("accessToken", dto.accessToken()).queryParam("refreshToken", dto.refreshToken()).build().toUriString();
+        String target = UriComponentsBuilder.fromUriString(frontendUrl).queryParam("accessToken", dto.accessToken()).build().toUriString();
 
         log.debug("[CTRL] Redirecting back to frontend with tokens: {}", target);
         res.sendRedirect(target);
